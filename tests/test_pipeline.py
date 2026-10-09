@@ -86,3 +86,24 @@ def test_quality_gate_passes_on_clean_run_and_fails_on_corruption(tmp_path):
     assert all(ok for _, ok in quality_checks.run_checks(con))
     con.execute("UPDATE gold.daily_athlete_stats SET distance_km = distance_km + 100")
     assert not all(ok for _, ok in quality_checks.run_checks(con))
+
+
+def test_crash_between_silver_and_gold_leaves_no_half_state(tmp_path, monkeypatch):
+    land, db = setup(tmp_path)
+    write(land, "b1.ndjson", [ev("A1"), ev("A2", distance=-1.0)])
+    real_gold = pipeline.build_gold
+
+    def boom(con):
+        raise RuntimeError("simulated crash before gold finished")
+
+    monkeypatch.setattr(pipeline, "build_gold", boom)
+    try:
+        pipeline.run(db, land)
+    except RuntimeError:
+        pass
+    monkeypatch.setattr(pipeline, "build_gold", real_gold)   # the retry
+    con, _ = pipeline.run(db, land)
+    assert con.execute("SELECT count(*) FROM silver.activities").fetchone()[0] == 1
+    assert con.execute("SELECT count(*) FROM gold.daily_athlete_stats").fetchone()[0] == 1
+    assert con.execute("SELECT count(*) FROM silver.rejected_events").fetchone()[0] == 1
+    assert all(ok for _, ok in quality_checks.run_checks(con))

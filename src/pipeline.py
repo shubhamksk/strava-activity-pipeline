@@ -6,6 +6,7 @@ Design rules (each one answers a real failure mode):
   * Silver keeps ONE row per activity: the newest version wins.
   * Bad rows go to a quarantine table with a reason; they are never silently dropped.
   * Gold is rebuilt only for the athlete-days that changed (incremental).
+  * Silver and Gold are written in ONE transaction, so a crash can never leave them out of sync.
 """
 import sys
 from pathlib import Path
@@ -127,8 +128,7 @@ def build_silver(con):
 
 
 def build_gold(con):
-    """Recompute only the athlete-days that changed (delete + insert inside one transaction)."""
-    con.execute("BEGIN")
+    """Recompute only the athlete-days that changed. The caller owns the transaction."""
     con.execute("""DELETE FROM gold.daily_athlete_stats d USING touched t
                    WHERE d.athlete_id = t.athlete_id AND d.activity_date = t.activity_date""")
     con.execute("""
@@ -137,14 +137,21 @@ def build_gold(con):
                round(sum(a.moving_time_s) / 60.0, 2), round(sum(a.elevation_gain_m), 1)
         FROM silver.activities a JOIN touched t USING (athlete_id, activity_date)
         GROUP BY a.athlete_id, a.activity_date""")
-    con.execute("COMMIT")
 
 
 def run(db_path="warehouse.duckdb", landing_dir="data/landing"):
     con = connect(db_path)
     loaded = load_bronze(con, landing_dir)
-    touched = build_silver(con)
-    build_gold(con)
+    # Silver + Gold commit together or not at all. If anything fails, the file stays
+    # "unprocessed" and the next run redoes both layers from Bronze (no half-finished state).
+    con.execute("BEGIN")
+    try:
+        touched = build_silver(con)
+        build_gold(con)
+        con.execute("COMMIT")
+    except Exception:
+        con.execute("ROLLBACK")
+        raise
     return con, {"bronze_rows_loaded": loaded, "athlete_days_recomputed": touched}
 
 

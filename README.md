@@ -11,6 +11,7 @@ Offline-first activity ingestion with a Bronze -> Silver -> Gold architecture.
 | Edit changes the activity date | Both the old and new athlete-day are recomputed |
 | Bad records | Quarantined in `silver.rejected_events` with a reason |
 | Re-running a job | File-level load log + primary-key upserts make every run idempotent |
+| Crash mid-run | Silver and Gold commit in one transaction; a failed run rolls back and the retry redoes both from Bronze |
 
 ## Run
     pip install -r requirements.txt
@@ -26,4 +27,9 @@ Offline-first activity ingestion with a Bronze -> Silver -> Gold architecture.
 
 ## Sample result (3 daily batches)
 665 raw events -> 600 clean activities, 9 quarantined, 56 duplicates/superseded versions;
-re-running loads 0 rows and recomputes 0 athlete-days; 7/7 quality checks pass.
+re-running loads 0 rows and recomputes 0 athlete-days; all quality checks pass.
+
+## Known limitations
+- Simulated data (about 600 rows), not real Strava data; scale is untested.
+- Load log tracks filenames, not file hashes, so a corrected file re-uploaded under the same name is skipped.
+- No scheduler/orchestrator (Airflow or cron) yet; DuckDB allows a single writer.

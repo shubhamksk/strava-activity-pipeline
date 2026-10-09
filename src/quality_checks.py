@@ -8,10 +8,12 @@ CHECKS = {
         "SELECT count(*) FROM silver.activities WHERE athlete_id IS NULL",
     "silver has no negative distance":
         "SELECT count(*) FROM silver.activities WHERE distance_m < 0",
-    "bronze rows reconcile: bronze = silver + rejected + superseded/duplicates (must be >= 0)":
-        """SELECT CASE WHEN (SELECT count(*) FROM bronze.raw_events)
-                           >= (SELECT count(*) FROM silver.activities) + (SELECT count(*) FROM silver.rejected_events)
-                      THEN 0 ELSE 1 END""",
+    "no activity vanishes: every bronze activity is in silver or quarantined":
+        """SELECT count(*) FROM (SELECT DISTINCT activity_id FROM bronze.raw_events WHERE activity_id IS NOT NULL) b
+           WHERE b.activity_id NOT IN (SELECT activity_id FROM silver.activities)
+             AND b.activity_id NOT IN (SELECT activity_id FROM silver.rejected_events WHERE activity_id IS NOT NULL)""",
+    "quarantine has no duplicate entries":
+        """SELECT count(*) - count(DISTINCT (activity_id, _source_file, reason)) FROM silver.rejected_events""",
     "gold distance equals silver distance (km)":
         """SELECT abs((SELECT coalesce(sum(distance_km),0) FROM gold.daily_athlete_stats)
                     - (SELECT coalesce(sum(distance_m),0)/1000 FROM silver.activities)) > 0.01""",
